@@ -3,13 +3,14 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from torch.nn.functional import cross_entropy, softmax
 import torch
-
-device = torch.device('cuda')
+import json
 
 feature_size = 384
 context_size = 64
 head_count = 6
 block_count = 6
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class SingleHead(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -17,13 +18,14 @@ class SingleHead(nn.Module):
         self.linear_key_mapping = nn.Linear(in_features=in_dim, out_features=out_dim)
         self.linear_query_mapping = nn.Linear(in_features=in_dim, out_features=out_dim)
         self.linear_value_mapping = nn.Linear(in_features=in_dim, out_features=out_dim)
+        self.register_buffer("lower_triangular", torch.tril(torch.ones(context_size, context_size)))
+
     def forward(self, x):
         key = self.linear_key_mapping(x)
         query = self.linear_query_mapping(x)
         value = self.linear_value_mapping(x)
         transformation = query @ key.permute(0,2,1) * key.shape[2] ** -0.5  # (B, 8, 32) @ (B, 32, 8) -> (B, 8, 8)
-        lower_triangular = torch.tril(torch.ones(x.shape[1], x.shape[1])).to(device)
-        transformation = transformation.masked_fill(lower_triangular == 0, float('-inf'))
+        transformation = transformation.masked_fill(self.lower_triangular[:x.shape[1], :x.shape[1]] == 0, float('-inf'))
         transformation = softmax(transformation, dim=-1)
         x = transformation @ value
         return x
@@ -37,7 +39,7 @@ class MultiHead(nn.Module):
         self.heads = []
         for i in range(head_count):
             self.heads.append(SingleHead(feature_size, single_head_size))
-        self.heads = nn.Sequential(*self.heads)
+        self.heads = nn.ModuleList(self.heads)
     def forward(self, x):
         outputs = []
         for head in self.heads:
@@ -118,11 +120,13 @@ class MyModel(nn.Module):
 
 if __name__ == '__main__':
     dataset = TextDataset2(context_size=context_size)
+    
     generator1 = torch.Generator().manual_seed(42)
     train_set, validation_set = random_split(dataset, [int(len(dataset) * 0.8), len(dataset) - int(len(dataset) * 0.8)], generator=generator1)
-    training_loader = DataLoader(train_set, batch_size=32, shuffle=True)
-    validation_loader = DataLoader(validation_set, batch_size=32, shuffle=True)
-    model = MyModel(len(dataset.encode_dict), context_size).to(device)
+    training_loader = DataLoader(train_set, batch_size=32, shuffle=False)
+    validation_loader = DataLoader(validation_set, batch_size=32, shuffle=False)
+    model = torch.load(f'best3.pt') 
+    model.to(device)   
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
     count = 0
@@ -166,8 +170,17 @@ if __name__ == '__main__':
             print(f'training loss: {training_loss_sum} validation loss: {loss_sum}')
             training_loss_sum = 0
             model.train()
-    
-    torch.save(model.state_dict(), f'best1.pt')
+    model.eval()
+    model.to(torch.device('cpu'))
+    torch.save(model, f'best3.pt')
     print(dataset.decode(model.generate(torch.zeros((1,1), dtype=torch.long).to(device), token_count=500)[0].tolist()))
-        
+    f = open('encode_dict.json','w')
+    f.write(json.dumps(dataset.encode_dict))
+    f.close()
+
+    f = open('decode_dict.json','w')
+    f.write(json.dumps(dataset.decode_dict))
+    f.close()
+
+
         

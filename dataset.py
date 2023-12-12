@@ -3,11 +3,12 @@ from torch.utils.data import Dataset
 import pandas as pd
 import torch
 
+import json
+
 class TextDataset2(Dataset):
     def __init__(self, context_size=8):
         self.chrset = set()
         self.index = [] # A list of dictionaries, containing the row and offset of the text.
-        # self.df = pd.read_csv(f'bitcoin_articles.csv')
         self.context_size = context_size
         f = open(f'internet_archive_scifi_v3.txt')
         self.contents = f.read()
